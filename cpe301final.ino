@@ -2,10 +2,50 @@
 
 //As of right now pulling relevant bits of code from labs, will clear up superfluous stuff at some later point
 
+//yeah I'm not sure what to use the built in timer for, since monitoring is going to be done with the external real time clock
+
+/*
+PIN MAPPING
+
+0
+1 
+2 LCD D4
+3 LCD D5
+4 LCD D6
+5 LCD D7
+6 MOTOR 1N1
+7 MOTOR 1N2
+8 MOTOR 1N3
+9 MOTOR 1N4
+10 TEMP/HUMIDITY SENSOR
+11 LCD RS
+12 LCD EN
+13 YELLOW DISABLED LED
+14 GREEN IDLE LED
+15 RED ERROR LED
+16 BLUE RUNNING LED
+17 RESET BUTTON
+18 START BUTTON
+19 FAN BUTTON
+20 RTC SDA
+21 RTC 21
+
+A0 WATER SENSOR
+*/
+
 #include <LiquidCrystal.h>
+#include <dht11.h>
+#include <RTClib.h>
+#include <Stepper.h>
 
 #define RDA
-#define TBE 
+#define TBE
+#define DHT11PIN 4
+
+dht11 DHT11;
+RTC_DS321 rtc;
+//4096 steps per revolution
+Stepper myStepper = Stepper(4096,6,7,8,9);
 
 // UART Pointers
 volatile unsigned char *myUCSR0A  = (unsigned char *)0x00C0;
@@ -14,6 +54,7 @@ volatile unsigned char *myUCSR0C  = (unsigned char *)0x00C2;
 volatile unsigned int  *myUBRR0   = (unsigned int *)0x00C4;
 volatile unsigned char *myUDR0    = (unsigned char *)0x00C6;
 // GPIO Pointers
+//since the LCD library sets itself up this might just need the status LEDs and buttons
 volatile unsigned char *portB     = (unsigned char *)0x25;
 volatile unsigned char *portDDRB  = (unsigned char *)0x24;
 // Timer Pointers
@@ -28,50 +69,64 @@ volatile unsigned char* my_ADMUX = (unsigned char*) 0x7C;
 volatile unsigned char* my_ADCSRB = (unsigned char*) 0x7B;
 volatile unsigned char* my_ADCSRA = (unsigned char*) 0x7A;
 volatile unsigned int* my_ADC_DATA = (unsigned int*) 0x78;
+// LCD stuff
+const int RS = 11, EN = 12, D4 = 2, D5 = 3, D6 = 4, D7 = 5;
+LiquidCrystal lcd(RS, EN, D4, D5, D6, D7);
 
-
-//byte in_char; //copied from lab8, don't think it'll be really useful at the moment but won't delete it until I'm 100% sure
-//This array holds the tick values
-//calculate all the tick value for the given frequencies and put that in the ticks array
-//unsigned int ticks[7]= {18182,16194,15296,13629,12140,11461,10204};
-//This array holds the characters to be entered, index echos the index of the ticks
-//that means ticks[0] should have the tick value for the character in input[0]
-//unsigned char input[7]= {'A','B','C','D','E','F','G'};
-
-//global ticks counter
+//global UART ticks counter
 unsigned int currentTicks = 65535;
 unsigned char timer_running = 0;
 
-unsigned int char state = D;
+//made volatile because interrupts are going to be messing with it
+volatile unsigned int char state = D;
+//or specifically the start button will be messing with it.
 //Disabled, Idle, Error, Running, D,I,E,R, starts on disabled
 
 void setup() 
-{                
+{
+  // GPIO setup          
   // set PB6 to output
   *portDDRB |= 0x40;
   // set PB6 LOW
   *portB &= ~0x40;
+
+  // Timer setup
   // setup the Timer for Normal Mode, with the TOV interrupt enabled
   setup_timer_regs();
   // Start the UART
   U0Init(9600);
+
+  // LCD setup
+  lcd.begin(16,2);
 }
 
 //"The vent position should be adjustable all states except Disabled"
-//Start and fan adjust positions will both be buttons connected to pins with interrupts, both can be interrupts, why not
-//Could have the disable state just outright disable the reset button pin's interrupt capability, but I feel it'd be
-//quicker to just have an if(state = "D"){} bit so the interrupt just doesn't do anything if called outside of the disabled state
+//fan adjust will be an interrupt why not
+//if(state = "D"){} bit so the interrupt just doesn't do anything if called outside of the disabled state
+
+//For the real time clock
+unsigned long oldMillis = 0;
+const long interval = 60000;
+
+
+//I would put the ADC stuff in the main loop but apparently it isn't even allowed to monitor in the disabled state so that's also being
+//moved into global variables and a different function
+unsigned int temp;
+unsigned int humidity;
+unsigned int water;
+const int tempThresh;
+const int waterThresh;
 
 void loop() 
 {
+  unsigned long newMillis = millis() //
   switch(state){
     case "D":
     //fan is off
     //Turn yellow LED on, all others off
 
     //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
-
-    //
+    //so really I guess this state does nothing except for the fan and lights
     break;
 
     case "I":
@@ -79,7 +134,8 @@ void loop()
     //Turn on green LED, all others off
     
     //Regularly read temp and humidity, display to LCD
-
+    readings();
+    notify(newMillis);
     //state gets changed to error if water level is too low
     break;
 
@@ -88,17 +144,41 @@ void loop()
     //Red LED on, all others off
     
     //Reset button switches state back to idle, but only if the water level is above the minimum threshold
+    readings();
+    //uncomment this after figuring out where the reset button goes
+    /*if(water > waterThresh && [resetpinreg] & 0xblah){
+      state = "I";
+      break;
+    }*/
 
     //Display error message to LCD
+    //Doc says readings should be displayed to the LCD in all states except disabled, also says error should display an error message
+    //I feel like the error message takes precedence
+    //actually will use the UART to make it alternate between the two perhaps
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.Print("LOW WATER, REFILL");
+    lcd.setCursor(0,1);
+    lcd.Print("THEN HIT RESET");
     break;
 
     case "R":
     //Turn on fan
     //Blue LED on, all others off
 
+    //readings to LCD
+    readings();
+    notify(newMillis);
+
     //Turn state back to idle if temperature is below threshold
+    if(temp < tempThresh){
+      state = "I";
+    }
 
     //Turn state to error if water gets too low
+    if(water < waterThresh){
+      state = "E";
+    }
     break;
   }
 }
@@ -188,4 +268,44 @@ void adc_init()
   *my_ADMUX &= ~0x20;
  // clear bit 4-0 to 0 to reset the channel and gain bits
   *my_ADMUX &= ~0x0F;
+}
+
+unsigned int adc_read(unsigned char adc_channel_num)
+{
+  // clear the channel selection bits (MUX 4:0)
+ * my_ADMUX &= ~0x0F;
+
+  // clear the channel selection bits (MUX 5)
+  *my_ADCSRB &= ~0x08;
+ 
+  // set the channel selection bits for channel
+  *my_ADMUX |= (0x01 << adc_channel_num);
+
+  // set bit 6 of ADCSRA to 1 to start a conversion
+  *my_ADCSRA |= 0x40;
+  // wait for the conversion to complete
+  while((*my_ADCSRA & 0x40) != 0);
+  // return the result in the ADC data register and format the data based on right justification (check the lecture slide)
+  
+  unsigned int val = *my_ADC_DATA & 0x03FF;
+  return val;
+}
+
+void readings(){
+  water = adc_read(0);
+  temp = adc_read(1);
+  humidity = adc_read(2);
+}
+
+//checks if it's been a minute (or more) since the last update, if so writes the temperature and humidity to the LCD
+//does nothing if not
+void notify(long now){
+  if(now - oldMillis >= interval){
+    oldMillis = now;
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.Print("Temp: %d", temp);
+    lcd.setCursor(0,1);
+    lcd.Print("Humid: %d", humidity);
+  }
 }
