@@ -1,14 +1,12 @@
 //Allen Bruan, Jackson Blake
 
-//As of right now pulling relevant bits of code from labs, will clear up superfluous stuff at some later point
-
-//yeah I'm not sure what to use the built in timer for, since monitoring is going to be done with the external real time clock
+//wow I finally found a use for the UART as a fan controller
 
 /*
 PIN MAPPING
 
 0
-1 
+1 FAN MOTOR OUTPUT PE1
 2 LCD D4
 3 LCD D5
 4 LCD D6
@@ -44,8 +42,8 @@ A0 WATER SENSOR
 
 dht DHT;
 RTC_DS3231 rtc;
-//4096 steps per revolution
-Stepper myStepper = Stepper(4096, 6, 7, 8, 9);
+int stepsPerRev = 4096;
+Stepper myStepper = Stepper(stepsPerRev, 6, 7, 8, 9);
 
 // UART Pointers
 volatile unsigned char *myUCSR0A = (unsigned char *)0x00C0;
@@ -57,14 +55,17 @@ volatile unsigned char *myUDR0 = (unsigned char *)0x00C6;
 //since the LCD library sets itself up this might just need the status LEDs and buttons
 volatile unsigned char *portB = (unsigned char *)0x25;
 volatile unsigned char *portDDRB = (unsigned char *)0x24;
-volatile unsigned char *portJ = (unsigned char *)0x105;
-volatile unsigned char *portDDRJ = (unsigned char *)0x104;
+volatile unsigned char *portD = (unsigned char *)0x2B;
+volatile unsigned char *portDDRD = (unsigned char *)0x2A;
+volatile unsigned char *portE = (unsigned char *)0x2E;
+volatile unsigned char *portDDRE = (unsigned char *)0x2D;
+volatile unsigned char *pinD = (unsigned char *)0x29;
 volatile unsigned char *portH = (unsigned char *)0x102;
 volatile unsigned char *portDDRH = (unsigned char *)0x101;
 volatile unsigned char *pinH = (unsigned char *)0x100;
-volatile unsigned char *portD = (unsigned char *)0x2B;
-volatile unsigned char *portDDRD = (unsigned char *)0x2A;
-volatile unsigned char *pinD = (unsigned char *)0x29;
+volatile unsigned char *portJ = (unsigned char *)0x105;
+volatile unsigned char *portDDRJ = (unsigned char *)0x104;
+
 // Timer Pointers
 volatile unsigned char *myTCCR1A = (unsigned char *)0x80;
 volatile unsigned char *myTCCR1B = (unsigned char *)0x81;
@@ -98,9 +99,11 @@ void setup() {
   //PH0, PD3, PD2 to input (control buttons)
   //setting outputs, setting them low for start
   *portDDRB |= 0x80;
+  *portDDRE |= 0x02;
   *portDDRJ |= 0x03;
   *portDDRH |= 0x02;
 
+  *portE &= ~0x02;
   *portB &= ~0x80;
   *portJ &= ~0x03;
   *portH &= ~0x02;
@@ -114,7 +117,7 @@ void setup() {
 
   //attach interrupts
   attachInterrupt(digitalPinToInterrupt(18), startPressed, FALLING);
-
+  attachInterrupt(digitalPinToInterrupt(19), ventPressed, FALLING);
   // Timer setup
   // setup the Timer for Normal Mode, with the TOV interrupt enabled
   setup_timer_regs();
@@ -133,6 +136,8 @@ void setup() {
 unsigned long oldMillis = 0;
 const long interval = 60000;
 
+//toggles between 0 and not 0 so the fan direction toggles when pressed
+unsigned char fanDir = 0;
 
 //I would put the ADC stuff in the main loop but apparently it isn't even allowed to monitor in the disabled state so that's also being
 //moved into global variables and a different function
@@ -290,8 +295,8 @@ case 'R':
     *myTCCR1B |= 0x01;
     // if it's not the STOP amount
     if (currentTicks != 65535) {
-      // XOR to toggle PB6
-      *portB ^= 0x40;
+      // XOR to toggle PE1
+      *portE ^= 0x02;
     }
   }
   /*
@@ -406,5 +411,45 @@ case 'R':
         putchar(buffer[i]);
       }
       putchar('\n');
+    }
+  }
+
+  void ventPressed() {
+    //it's toggle that works only when the state isn't disabled
+    if (state != 'D') {
+      if(fanDir = 0){
+        fanDir = ~fanDir;
+        myStepper.setSpeed(10);
+        myStepper.step(stepsPerRev/8);
+      }else if(fanDir != 0){
+        fanDir = 0;
+        myStepper.setSpeed(10);
+        myStepper.step(-stepsPerRev/8);
+    }
+      state = 'I';
+      DateTime stamp = rtc.now();
+      char buffer[32];
+      int len = sprintf(buffer, "%d:%d:%d: VENT TURN", stamp.hour(), stamp.minute(), stamp.second());
+      for (int i = 0; i < len; i++) {
+        putchar(buffer[i]);
+      }
+      putchar('\n');
+    } 
+  }
+
+  void toggleFan(bool running){
+    if(running){
+      currentTicks = 10204;
+      if(!timer_running){
+        *myTCCR1B |= 0x05;
+        timer_running = 1;
+      }
+    } else{
+      currentTicks = 65535;
+      if(timer_running){
+        *myTCCR1B &= 0xF8;
+        timer_running = 0;
+        *portE &= ~0x02;
+      }
     }
   }
