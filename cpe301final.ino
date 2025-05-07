@@ -13,20 +13,20 @@ PIN MAPPING
 3 LCD D5
 4 LCD D6
 5 LCD D7
-6 MOTOR 1N1
+6 MOTOR 1N1 
 7 MOTOR 1N2
 8 MOTOR 1N3
 9 MOTOR 1N4
 10 TEMP/HUMIDITY SENSOR
 11 LCD RS
 12 LCD EN
-13 YELLOW DISABLED LED
-14 GREEN IDLE LED
-15 RED ERROR LED
-16 BLUE RUNNING LED
-17 RESET BUTTON
-18 START BUTTON
-19 FAN BUTTON
+13 YELLOW DISABLED LED PB7
+14 GREEN IDLE LED  PJ1
+15 RED ERROR LED PJ0
+16 BLUE RUNNING LED PH1
+17 RESET BUTTON PH0
+18 START BUTTON PD3
+19 FAN BUTTON PD2
 20 RTC SDA
 21 RTC 21
 
@@ -34,16 +34,16 @@ A0 WATER SENSOR
 */
 
 #include <LiquidCrystal.h>
-#include <dht11.h>
+#include <dht.h>
 #include <RTClib.h>
 #include <Stepper.h>
 
 #define RDA
 #define TBE
-#define DHT11PIN 4
+#define DHT11PIN 10
 
-dht11 DHT11;
-RTC_DS321 rtc;
+dht DHT;
+RTC_DS3231 rtc;
 //4096 steps per revolution
 Stepper myStepper = Stepper(4096,6,7,8,9);
 
@@ -55,8 +55,16 @@ volatile unsigned int  *myUBRR0   = (unsigned int *)0x00C4;
 volatile unsigned char *myUDR0    = (unsigned char *)0x00C6;
 // GPIO Pointers
 //since the LCD library sets itself up this might just need the status LEDs and buttons
-volatile unsigned char *portB     = (unsigned char *)0x25;
+volatile unsigned char *portB  = (unsigned char *)0x25;
 volatile unsigned char *portDDRB  = (unsigned char *)0x24;
+volatile unsigned char *portJ  = (unsigned char *)0x105;
+volatile unsigned char *portDDRJ  = (unsigned char *)0x104;
+volatile unsigned char *portH  = (unsigned char *)0x102;
+volatile unsigned char *portDDRH  = (unsigned char *)0x101;
+volatile unsigned char *pinH  = (unsigned char *)0x100;
+volatile unsigned char *portD  = (unsigned char *)0x2B;
+volatile unsigned char *portDDRD  = (unsigned char *)0x2A;
+volatile unsigned char *pinD  = (unsigned char *)0x29;
 // Timer Pointers
 volatile unsigned char *myTCCR1A  = (unsigned char *)0x80;
 volatile unsigned char *myTCCR1B  = (unsigned char *)0x81;
@@ -78,17 +86,30 @@ unsigned int currentTicks = 65535;
 unsigned char timer_running = 0;
 
 //made volatile because interrupts are going to be messing with it
-volatile unsigned int char state = D;
+volatile unsigned char state = 'D';
 //or specifically the start button will be messing with it.
 //Disabled, Idle, Error, Running, D,I,E,R, starts on disabled
 
 void setup() 
 {
-  // GPIO setup          
-  // set PB6 to output
-  *portDDRB |= 0x40;
+  // GPIO setup
+  //PB7, PJ1, PJ0, PH1 to output (status LEDs)
+  //PH0, PD3, PD2 to input (control buttons)
+  //setting outputs, setting them low for start
+  *portDDRB |= 0x80;
+  *portDDRJ |= 0x03;
+  *portDDRH |= 0x02;
   // set PB6 LOW
-  *portB &= ~0x40;
+  *portB &= ~0x80;
+  *portJ &= ~0x03;
+  *portH &= ~0x02;
+
+  //set inputs with pullup resistors
+  *portDDRH &= ~0x01;
+  *portDDRD &= ~0x0C;
+
+  *portH |= 0x01;
+  *portD |= 0x0C;
 
   // Timer setup
   // setup the Timer for Normal Mode, with the TOV interrupt enabled
@@ -114,71 +135,72 @@ const long interval = 60000;
 unsigned int temp;
 unsigned int humidity;
 unsigned int water;
-const int tempThresh;
-const int waterThresh;
+const int tempThresh = 25;
+const int waterThresh = 300; //calibrate later idk
 
 void loop() 
 {
-  unsigned long newMillis = millis() //
+  unsigned long newMillis = millis(); //
   switch(state){
-    case "D":
-    //fan is off
-    //Turn yellow LED on, all others off
+      case 'D':
+      //fan is off
+      //Turn yellow LED on, all others off
 
-    //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
-    //so really I guess this state does nothing except for the fan and lights
+      //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
+      //so really I guess this state does nothing except for the fan and lights
     break;
 
-    case "I":
-    //fan is off
-    //Turn on green LED, all others off
-    
-    //Regularly read temp and humidity, display to LCD
-    readings();
-    notify(newMillis);
-    //state gets changed to error if water level is too low
+    case 'I':
+      //fan is off
+      //Turn on green LED, all others off
+      
+      //Regularly read temp and humidity, display to LCD
+      readings();
+      notify(newMillis);
+      //state gets changed to error if water level is too low
+      
     break;
 
-    case "E":
-    //Ensure motor is off
-    //Red LED on, all others off
-    
-    //Reset button switches state back to idle, but only if the water level is above the minimum threshold
-    readings();
-    //uncomment this after figuring out where the reset button goes
-    /*if(water > waterThresh && [resetpinreg] & 0xblah){
-      state = "I";
-      break;
-    }*/
+    case 'E':
+      //Ensure motor is off
+      //Red LED on, all others off
+      
+      //Reset button switches state back to idle, but only if the water level is above the minimum threshold
+      readings();
+      //uncomment this after figuring out where the reset button goes
+      if(*pinD & 0x01 && water > waterThresh){
+        state = "I";
+        break;
+      }
 
-    //Display error message to LCD
-    //Doc says readings should be displayed to the LCD in all states except disabled, also says error should display an error message
-    //I feel like the error message takes precedence
-    //actually will use the UART to make it alternate between the two perhaps
-    lcd.clear();
-    lcd.setCursor(0,0);
-    lcd.Print("LOW WATER, REFILL");
-    lcd.setCursor(0,1);
-    lcd.Print("THEN HIT RESET");
+      //Display error message to LCD
+      //Doc says readings should be displayed to the LCD in all states except disabled, also says error should display an error message
+      //I feel like the error message takes precedence
+      //actually will use the UART to make it alternate between the two perhaps
+      lcd.clear();
+      lcd.setCursor(0,0);
+      lcd.print("LOW WATER, REFILL");
+      lcd.setCursor(0,1);
+      lcd.print("THEN HIT RESET");
     break;
 
-    case "R":
-    //Turn on fan
-    //Blue LED on, all others off
+    case 'R':
+      //Turn on fan
+      //Blue LED on, all others off
 
-    //readings to LCD
-    readings();
-    notify(newMillis);
+      //readings to LCD
+      readings();
+      notify(newMillis);
 
-    //Turn state back to idle if temperature is below threshold
-    if(temp < tempThresh){
-      state = "I";
-    }
+      //Turn state back to idle if temperature is below threshold
+      if(temp < tempThresh){
+        state = "I";
+      }
 
-    //Turn state to error if water gets too low
-    if(water < waterThresh){
-      state = "E";
-    }
+      //Turn state to error if water gets too low
+      if(water < waterThresh){
+        state = "E";
+      }
     break;
   }
 }
@@ -293,8 +315,8 @@ unsigned int adc_read(unsigned char adc_channel_num)
 
 void readings(){
   water = adc_read(0);
-  temp = adc_read(1);
-  humidity = adc_read(2);
+  temp = DHT.temperature;
+  humidity = DHT.humidity;
 }
 
 //checks if it's been a minute (or more) since the last update, if so writes the temperature and humidity to the LCD
@@ -304,8 +326,11 @@ void notify(long now){
     oldMillis = now;
     lcd.clear();
     lcd.setCursor(0,0);
-    lcd.Print("Temp: %d", temp);
+    lcd.print("Temp: ");
+    lcd.print(temp);
     lcd.setCursor(0,1);
-    lcd.Print("Humid: %d", humidity);
+    lcd.print("Humidity: ");
+    lcd.print(humidity);
+    lcd.print("%");
   }
 }
