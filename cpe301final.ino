@@ -96,6 +96,7 @@ volatile unsigned char state = 'D';
 void setup() {
   // GPIO setup
   //PB7, PJ1, PJ0, PH1 to output (status LEDs)
+  //PE1 to output (fan motor)
   //PH0, PD3, PD2 to input (control buttons)
   //setting outputs, setting them low for start
   *portDDRB |= 0x80;
@@ -126,6 +127,12 @@ void setup() {
 
   // LCD setup
   lcd.begin(16, 2);
+  //turn off the fan
+  currentTicks = 65535;
+  *myTCCR1B &= 0xF8;
+  timer_running = 0;
+  *portE &= ~0x02;
+  state = 'D';
 }
 
 //"The vent position should be adjustable all states except Disabled"
@@ -152,10 +159,16 @@ void loop() {
   switch (state) {
     case 'D':
       //fan is off
+    currentTicks = 65535;
+    *myTCCR1B &= 0xF8;
+    timer_running = 0;
+    *portE &= ~0x02;
+
       //Turn yellow LED on, all others off
       *portB |= 0x80;
       *portJ &= ~0x03;
       *portH &= ~0x02;
+      lcd.print("Standing by");
 
 
       //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
@@ -164,6 +177,10 @@ void loop() {
 
     case 'I':
       //fan is off
+      currentTicks = 65535;
+      *myTCCR1B &= 0xF8;
+      timer_running = 0;
+      *portE &= ~0x02;
       //Turn on green LED, all others off
       *portB &= ~0x80;
       *portJ |= 0x02;
@@ -200,6 +217,10 @@ void loop() {
 
     case 'E':
       //Ensure motor is off
+    currentTicks = 65535;
+    *myTCCR1B &= 0xF8;
+    timer_running = 0;
+    *portE &= ~0x02;
       //Red LED on, all others off
       *portB &= ~0x80;
       *portJ &= ~0x02;
@@ -209,7 +230,7 @@ void loop() {
       //Reset button switches state back to idle, but only if the water level is above the minimum threshold
       readings();
       //uncomment this after figuring out where the reset button goes
-      if (*pinD & 0x01 && water > waterThresh) {
+      if (~(*pinD & 0x01) && water > waterThresh) {
         state = "I";
         DateTime stamp = rtc.now();
         char buffer[32];
@@ -234,6 +255,11 @@ break;
 
 case 'R':
   //Turn on fan
+  currentTicks = 10204;
+  if(!timer_running){
+    *myTCCR1B |= 0x05;
+    timer_running = 1;
+  }
   //Blue LED on, all others off
   *portB &= ~0x80;
   *portJ &= ~0x03;
@@ -266,8 +292,7 @@ case 'R':
     putchar('\n');
   }
   break;
-  }
-}
+}}
 
 
   // Timer setup function
@@ -437,7 +462,7 @@ case 'R':
     } 
   }
 
-  void toggleFan(bool running){
+/*  void toggleFan(bool running){
     if(running){
       currentTicks = 10204;
       if(!timer_running){
@@ -453,3 +478,4 @@ case 'R':
       }
     }
   }
+*/
