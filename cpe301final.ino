@@ -99,7 +99,7 @@ void setup()
   *portDDRB |= 0x80;
   *portDDRJ |= 0x03;
   *portDDRH |= 0x02;
-  // set PB6 LOW
+
   *portB &= ~0x80;
   *portJ &= ~0x03;
   *portH &= ~0x02;
@@ -145,6 +145,10 @@ void loop()
       case 'D':
       //fan is off
       //Turn yellow LED on, all others off
+      *portB |= 0x80;
+      *portJ &= ~0x03;
+      *portH &= ~0x02;
+
 
       //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
       //so really I guess this state does nothing except for the fan and lights
@@ -153,17 +157,33 @@ void loop()
     case 'I':
       //fan is off
       //Turn on green LED, all others off
-      
+      *portB &= ~0x80;
+      *portJ |= 0x02;
+      *portJ &= ~0x01;
+      *portH &= ~0x02;
+
       //Regularly read temp and humidity, display to LCD
       readings();
       notify(newMillis);
       //state gets changed to error if water level is too low
+      if(water < waterThresh){
+        state = 'E';
+      }
+
+      //if temperature gets too high switch to running
+      if(temp > tempThresh){
+        state = 'R';
+      }
       
     break;
 
     case 'E':
       //Ensure motor is off
       //Red LED on, all others off
+      *portB &= ~0x80;
+      *portJ &= ~0x02;
+      *portJ |= 0x01;
+      *portH &= ~0x02;
       
       //Reset button switches state back to idle, but only if the water level is above the minimum threshold
       readings();
@@ -187,7 +207,9 @@ void loop()
     case 'R':
       //Turn on fan
       //Blue LED on, all others off
-
+      *portB &= ~0x80;
+      *portJ &= ~0x03;
+      *portH |= 0x02;
       //readings to LCD
       readings();
       notify(newMillis);
