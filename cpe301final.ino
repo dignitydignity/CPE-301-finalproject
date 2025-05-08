@@ -21,7 +21,7 @@ PIN MAPPING
 13 YELLOW DISABLED LED PB7
 14 GREEN IDLE LED  PJ1
 15 RED ERROR LED PJ0
-16 BLUE RUNNING LED PH1
+16 BLUE RUNNING LED PH1 
 17 RESET BUTTON PH0
 18 START/STOP BUTTON PD3
 19 FAN BUTTON PD2
@@ -94,6 +94,7 @@ volatile unsigned char state = 'D';
 
 
 void setup() {
+  Serial.println("Setting up");
   // GPIO setup
   //PB7, PJ1, PJ0, PH1 to output (status LEDs)
   //PE1 to output (fan motor)
@@ -109,6 +110,15 @@ void setup() {
   *portJ &= ~0x03;
   *portH &= ~0x02;
 
+  // Timer setup
+  // setup the Timer for Normal Mode, with the TOV interrupt enabled
+  setup_timer_regs();
+  // Start the UART
+  U0Init(9600);
+
+  //adc init
+  adc_init();
+
   //set inputs with pullup resistors
   *portDDRH &= ~0x01;
   *portDDRD &= ~0x0C;
@@ -117,13 +127,8 @@ void setup() {
   *portD |= 0x0C;
 
   //attach interrupts
-  attachInterrupt(digitalPinToInterrupt(18), startPressed, FALLING);
-  attachInterrupt(digitalPinToInterrupt(19), ventPressed, FALLING);
-  // Timer setup
-  // setup the Timer for Normal Mode, with the TOV interrupt enabled
-  setup_timer_regs();
-  // Start the UART
-  U0Init(9600);
+
+
 
   // LCD setup
   lcd.begin(16, 2);
@@ -133,6 +138,7 @@ void setup() {
   timer_running = 0;
   *portE &= ~0x02;
   state = 'D';
+  Serial.println("Setup complete");
 }
 
 //"The vent position should be adjustable all states except Disabled"
@@ -155,10 +161,15 @@ const int tempThresh = 25;
 const int waterThresh = 300;  //calibrate later idk
 
 void loop() {
+  //Serial.println("Main loop");
+  detachInterrupt(digitalPinToInterrupt(18));
+  attachInterrupt(digitalPinToInterrupt(19), ventPressed, FALLING);
   unsigned long newMillis = millis();  //
   switch (state) {
     case 'D':
+    attachInterrupt(digitalPinToInterrupt(18), startPressed, FALLING);
       //fan is off
+    Serial.println("disabled"); //for troubleshooting
     currentTicks = 65535;
     *myTCCR1B &= 0xF8;
     timer_running = 0;
@@ -168,6 +179,7 @@ void loop() {
       *portB |= 0x80;
       *portJ &= ~0x03;
       *portH &= ~0x02;
+      lcd.setCursor(0,0);
       lcd.print("Standing by");
 
 
@@ -177,6 +189,7 @@ void loop() {
 
     case 'I':
       //fan is off
+      Serial.println("idle"); //also for troubleshooting
       currentTicks = 65535;
       *myTCCR1B &= 0xF8;
       timer_running = 0;
@@ -418,9 +431,9 @@ case 'R':
 
   void startPressed() {
     //it's a toggle button now
-    if (state == 'D') {
+      detachInterrupt(digitalPinToInterrupt(18));
       state = 'I';
-      DateTime stamp = rtc.now();
+     /* DateTime stamp = rtc.now();
       char buffer[32];
       int len = sprintf(buffer, "%d:%d:%d: START PRESSED", stamp.hour(), stamp.minute(), stamp.second());
       for (int i = 0; i < len; i++) {
@@ -437,10 +450,10 @@ case 'R':
       }
       putchar('\n');
     }
-  }
+  */}
 
   void ventPressed() {
-    //it's toggle that works only when the state isn't disabled
+    /*//it's toggle that works only when the state isn't disabled
     if (state != 'D') {
       if(fanDir = 0){
         fanDir = ~fanDir;
@@ -459,8 +472,8 @@ case 'R':
         putchar(buffer[i]);
       }
       putchar('\n');
-    } 
-  }
+    */} 
+
 
 /*  void toggleFan(bool running){
     if(running){
