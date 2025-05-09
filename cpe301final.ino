@@ -218,7 +218,6 @@ void loop() {
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("STANDBY");
-      delay(100);
 
       break;
 
@@ -253,7 +252,6 @@ void loop() {
         changedState=1;
         state = 'R';
       }
-      delay(100);
       break;
 
     case 'E':
@@ -274,7 +272,6 @@ void loop() {
       //Doc says readings should be displayed to the LCD in all states except disabled, also says error should display an error message
       // I feel like the error message takes precedence
       //actually will use the UART to make it alternate between the two perhaps
-      delay(100);
       break;
 
     case 'R':
@@ -303,7 +300,6 @@ void loop() {
         state = "E";
         changedState=1;
       }
-      delay(100);
       break;
   }
 }
