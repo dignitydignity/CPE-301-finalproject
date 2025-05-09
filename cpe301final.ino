@@ -22,11 +22,11 @@ apparently plugging things into the communication pins messes with the serial mo
 23 FAN OUTPUT PA1
 25 RED ERROR LIGHT PA3
 27 BLUE RUNNING LIGHT PA5
-29 GREEN IDLE LIGHT PA7
 31 VENT IN1 AUTOCONFIG
 33 VENT IN2 AUTOCONFIG
 35 VENT IN3 AUTOCONFIG
 37 VENT IN4 AUTOCONFIG
+39 GREEN IDLE LIGHT PG2
 
 //INPUTS: PJ1,PD2,PD3
 //OUTPUTS: PB7,PA1,PA3,PA5,PA7
@@ -46,14 +46,14 @@ A0 WATER SENSOR
 dht DHT;
 RTC_DS3231 rtc;
 int stepsPerRev = 4096;
-Stepper myStepper = Stepper(stepsPerRev, 6, 7, 8, 9);
+Stepper myStepper = Stepper(stepsPerRev, 31, 33, 35, 37);
 
 // UART Pointers
 volatile unsigned char *myUCSR0A = (unsigned char *)0x00C0;
 volatile unsigned char *myUCSR0B = (unsigned char *)0x00C1;
 volatile unsigned char *myUCSR0C = (unsigned char *)0x00C2;
-volatile unsigned int *myUBRR0 = (unsigned int *)0x00C4;
-volatile unsigned char *myUDR0 = (unsigned char *)0x00C6;
+volatile unsigned int  *myUBRR0  = (unsigned int *) 0x00C4;
+volatile unsigned char *myUDR0   = (unsigned char *)0x00C6;
 // GPIO Pointers
 //since the LCD library sets itself up this might just need the status LEDs and buttons
 volatile unsigned char *portA = (unsigned char *)0x20;
@@ -62,8 +62,10 @@ volatile unsigned char *portB = (unsigned char *)0x25;
 volatile unsigned char *portDDRB = (unsigned char *)0x24;
 volatile unsigned char *portD = (unsigned char *)0x2B;
 volatile unsigned char *portDDRD = (unsigned char *)0x2A;
-volatile unsigned char *portJ = (unsigned char *)0x105;
-volatile unsigned char *portDDRJ = (unsigned char *)0x104;
+volatile unsigned char *portG = (unsigned char *)0x34;
+volatile unsigned char *portDDRG = (unsigned char *)0x33;
+volatile unsigned char *portE = (unsigned char *)0x2E;
+volatile unsigned char *portDDRE = (unsigned char *)0x2D;
 
 // Timer Pointers
 volatile unsigned char *myTCCR1A = (unsigned char *)0x80;
@@ -96,13 +98,22 @@ void setup() {
   //Serial.println("Setting up");
   // GPIO setup
   //INPUTS: PJ1,PD2,PD3
-  //OUTPUTS: PB7,PA1,PA3,PA5,PA7
+  //OUTPUTS: PB7,PA1,PA3,PA5,PG2
   //setting outputs, setting them low for start
-  *portDDRA |= 0xAA;
+  *portDDRA |= 0x2A;
   *portDDRB |= 0x80;
+  *portDDRG |= 0x04;
 
-  *portA &= ~0xAA;
-  *portB &= ~0x80;
+  *portA &= ~0x2A;
+  *portB &= ~0x80; 
+  *portG &= ~0x04;
+
+  //set inputs with pullup resistors
+  *portDDRD &= ~0x0C;
+  *portDDRE &= ~0x04;
+
+  *portD |= 0x0C;
+  *portE |= 0x04;
 
   // Timer setup
   // setup the Timer for Normal Mode, with the TOV interrupt enabled
@@ -110,17 +121,8 @@ void setup() {
   // Start the UART
   U0Init(9600);
 
+  //it took longer than I'd have liked to find out you have to manually tell this thing in another program that it is not january 1st 2000
   rtc.begin();
-
-  //adc init
-  adc_init();
-
-  //set inputs with pullup resistors
-  *portDDRD &= ~0x0C;
-  *portDDRJ &= ~0x02;
-
-  *portD |= 0x0C;
-  *portJ |= 0x02;
 
   //attach interrupts
 
@@ -132,7 +134,12 @@ void setup() {
   //turn off the fan
   fanToggle(0);
   state = 'D';
-  Serial.println("Setup complete");
+
+  myStepper.setSpeed(15);
+
+  //adc init
+  adc_init();
+  //Serial.println("Setup complete");
 
 }
 
@@ -145,30 +152,57 @@ unsigned long oldMillis = 0;
 const long interval = 60000;
 
 //toggles between 0 and not 0 so the fan direction toggles when pressed
-unsigned char fanDir = 0;
+volatile bool ventDir = 0;
+volatile bool ventTurn = 0;
+
 
 //I would put the ADC stuff in the main loop but apparently it isn't even allowed to monitor in the disabled state so that's also being
 //moved into global variables and a different function
-unsigned int temp;
-unsigned int humidity;
-unsigned int water;
-const int tempThresh = 15;
-const int waterThresh = 0;  //calibrate later idk
-bool changedState = 0;
-bool ventDir = 0;
+volatile unsigned int temp;
+volatile unsigned int humidity;
+volatile unsigned int water;
+const int tempThresh = 25;
+const int waterThresh = 50;  //calibrate later idk
+volatile bool changedState = 0;
 
 void loop() {
   //Serial.println("Main loop");
   if(changedState){
-    Serial.write("Changed state to ");
-    Serial.write(state);
-    Serial.write('\n');
+    printNow();
+    char msg[] = "State changed to: ";
+    int strlength = sizeof(msg) / sizeof(msg[0]);
+    for(int i = 0; i < strlength-1; i++){
+      U0putchar(msg[i]);
+    }
+    U0putchar(state);
+    U0putchar('\n');
+    if(state != 'D' && state != 'E'){
+      //forces the thing to update when you go to the idle state even if it hasn't been a full minute
+      readings();
+      notify();
+    }
+    changedState = 0;
   }
-  unsigned char lastState = state;
-  changedState = 0;
+  if(ventTurn){
+    printNow();
+    char msg[] = "Vent position toggled";
+    int strlength = sizeof(msg) / sizeof(msg[0]);
+    for(int i = 0; i < strlength-1; i++){
+      U0putchar(msg[i]);
+    }
+    U0putchar('\n');
+    myStepper.step(((stepsPerRev/8) * (-1 ^ ventDir)));
+    ventTurn = 0;
+  }
+  
   switch (state) {
     case 'D':
-    
+      //Turn yellow LED on, all others off
+      *portG &= ~0x04;
+      *portA &= ~0x28;
+      *portB |= 0x80;
+
+
       //fan is off
       fanToggle(0);
       //Serial.println("disabled"); //for troubleshooting
@@ -177,9 +211,6 @@ void loop() {
       timer_running = 0;
       *portE &= ~0x02;*/
 
-      //Turn yellow LED on, all others off
-      *portB |= 0x80;
-      *portA &= ~0xA8;
 
 
       //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
@@ -187,22 +218,27 @@ void loop() {
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("STANDBY");
-      delay(250);
+      delay(100);
 
       break;
 
     case 'I':
-      //fan is off
-      //Serial.println("idle"); //also for troubleshooting
-      fanToggle(0);
       //Turn on green LED, all others off
       *portB &= ~0x80;
       *portA &= ~0x28;
-      *portA |= 0x80;
+      *portG |= 0x04;
+      //fan is off
+      //Serial.println("idle"); //also for troubleshooting
+      fanToggle(0);
 
-      //Regularly read temp and humidity, display to LCD
+
+      //Regularly read temp and humidity, display to LCD every minute
       readings();
-      notify();
+      if((millis() - oldMillis) > interval){
+        notify();
+        oldMillis = millis();
+      }
+      
       //state gets changed to error if water level is too low
       if (water < waterThresh) {
         state = 'E';
@@ -213,19 +249,22 @@ void loop() {
       }
 
       //if temperature gets too high switch to running
-      if (temp > tempThresh) {
+      if (temp >= tempThresh) {
         changedState=1;
         state = 'R';
       }
+      delay(100);
       break;
 
     case 'E':
+      *portB &= ~0x80;
+      *portA &= ~0x20;
+      *portG &= ~0x04;
+      *portA |= 0x08;
       //Ensure motor is off
       fanToggle(0);
       //Red LED on, all others off
-      *portB &= ~0x80;
-      *portA &= ~0xA0;
-      *portA |= 0x08;
+
 
       //Reset button switches state back to idle, but only if the water level is above the minimum threshold
       readings();
@@ -235,18 +274,21 @@ void loop() {
       //Doc says readings should be displayed to the LCD in all states except disabled, also says error should display an error message
       // I feel like the error message takes precedence
       //actually will use the UART to make it alternate between the two perhaps
+      delay(100);
       break;
 
     case 'R':
+      *portB &= ~0x80;
+      *portA &= ~0x08;
+      *portA |= 0x20;
+      *portG &= ~0x04;
       //Turn on fan
       fanToggle(1);
       //Blue LED on, all others off
-      *portB &= ~0x80;
-      *portA &= ~0x88;
-      *portA |= 0x20;
+
       //readings to LCD
-      if((millis() - oldMillis) > interval){
       readings();
+      if((millis() - oldMillis) > interval){
       notify();
       }
 
@@ -254,13 +296,6 @@ void loop() {
       if (temp < tempThresh) {
         state = "I";
         changedState=1;
-        /*DateTime stamp = rtc.now();
-        char buffer[32];
-        int len = sprintf(buffer, "%d:%d:%d: LO TEMP FAN OFF", stamp.hour(), stamp.minute(), stamp.second());
-        for (int i = 0; i < len; i++) {
-          putchar(buffer[i]);
-        }
-        putchar('\n');*/
       }
 
       //Turn state to error if water gets too low
@@ -268,6 +303,7 @@ void loop() {
         state = "E";
         changedState=1;
       }
+      delay(100);
       break;
   }
 }
@@ -283,7 +319,6 @@ void readings() {
 //does nothing if not
 void notify() {
     //Serial.println("Displaying data to LCD");
-    oldMillis = millis();
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Temp: ");
@@ -298,34 +333,20 @@ void startPressed() {
   //it's a toggle button now
     state == 'D' ? state = 'I' : state = 'D';
     changedState = 1;
-    /* DateTime stamp = rtc.now();
-    char buffer[32];
-    int len = sprintf(buffer, "%d:%d:%d: START PRESSED", stamp.hour(), stamp.minute(), stamp.second());
-    for (int i = 0; i < len; i++) {
-      putchar(buffer[i]);
-    }
-    putchar('\n');
-  } else if (state != 'D') {
-    state = 'D';
-    DateTime stamp = rtc.now();
-    char buffer[32];
-    int len = sprintf(buffer, "%d:%d:%d: STOP PRESSED", stamp.hour(), stamp.minute(), stamp.second());
-    for (int i = 0; i < len; i++) {
-      putchar(buffer[i]);
-    }
-    putchar('\n');
-  }*/
 }
 
 void ventPressed() {
+  if(state != 'D'){
   ventDir ? ventDir = 0 : ventDir = 1;
+  ventTurn = 1;
+  }
 } 
 
 void resetPressed(){
   if(state == 'E'){
     state = 'I';
     changedState = 1;
-  }
+  } 
 }
 /*  void toggleFan(bool running){
     if(running){
@@ -365,7 +386,7 @@ unsigned char getChar() {
   return *myUDR0;
 }
 
-void putChar(unsigned char U0pdata) {
+void U0putchar(unsigned char U0pdata) {
   while (!(UCSR0A & 0x20)) {}
   *myUDR0 = U0pdata;
 }
@@ -441,9 +462,29 @@ ISR(TIMER1_OVF_vect) {
   *myTCCR1B |= 0x01;
   // if it's not the STOP amount
   if (currentTicks != 65535) {
-    // XOR to toggle PE1
-    *portA ^= 0x01;
+    //hmm today I will find out this interferes with the rest of the A register if it just XORs everything
+    *portA ^= 0x02;
   }
+}
+
+void printNow(){
+  DateTime now = rtc.now();
+  unsigned int hours2 = (now.hour() % 10);
+  unsigned int hours1 = ((now.hour() - hours2) / 10);
+  unsigned int minutes2 = (now.minute() % 10);
+  unsigned int minutes1 = ((now.minute() - minutes2) / 10);
+  unsigned int seconds2 = (now.second() % 10);
+  unsigned int seconds1= ((now.second() - seconds2) / 10);
+
+    U0putchar(hours1+48);
+    U0putchar(hours2+48);
+    U0putchar(':');
+    U0putchar(minutes1+48);
+    U0putchar(minutes2+48);
+    U0putchar(':');
+    U0putchar(seconds1+48);
+    U0putchar(seconds2+48);
+    U0putchar(' ');
 }
 
 //fan toggle
@@ -456,12 +497,11 @@ void fanToggle(bool status){
       // if the timer is running
       if(timer_running)
       {
-        Serial.write("Turned fan off");
         // stop the timer
         *myTCCR1B &= ~0x05;
         // set the flag to not running
         timer_running = 0;
-        *portA &= ~0x01;
+        *portA &= ~0x02;
       }
     }
     else
@@ -470,7 +510,6 @@ void fanToggle(bool status){
           currentTicks = 10204;
           if(!timer_running)
           {
-            Serial.write("Turned fan on");
               // start the timer
               *myTCCR1B |= 0x05;
               // set the running flag
