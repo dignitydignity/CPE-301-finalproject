@@ -146,7 +146,6 @@ void setup() {
 //"The vent position should be adjustable all states except Disabled"
 //fan adjust will be an interrupt why not
 //if(state == "D"){} bit so the interrupt just doesn't do anything if called outside of the disabled state
-
 //For the real time clock
 unsigned long oldMillis = 0;
 const long interval = 60000;
@@ -155,14 +154,11 @@ const long interval = 60000;
 volatile bool ventDir = 0;
 volatile bool ventTurn = 0;
 
-
-//I would put the ADC stuff in the main loop but apparently it isn't even allowed to monitor in the disabled state so that's also being
-//moved into global variables and a different function
 volatile unsigned int temp;
 volatile unsigned int humidity;
 volatile unsigned int water;
 const int tempThresh = 25;
-const int waterThresh = 50;  //calibrate later idk
+const int waterThresh = 50;  
 volatile bool changedState = 0;
 
 void loop() {
@@ -201,20 +197,7 @@ void loop() {
       *portG &= ~0x04;
       *portA &= ~0x28;
       *portB |= 0x80;
-
-
-      //fan is off
       fanToggle(0);
-      //Serial.println("disabled"); //for troubleshooting
-      /*currentTicks = 65535;
-      *myTCCR1B &= 0xF8;
-      timer_running = 0;
-      *portE &= ~0x02;*/
-
-
-
-      //this state shouldn't watch for the start button, that's an interrupt's job according to project doc
-      //so really I guess this state does nothing except for the fan and lights
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("STANDBY");
@@ -229,7 +212,6 @@ void loop() {
       //fan is off
       //Serial.println("idle"); //also for troubleshooting
       fanToggle(0);
-
 
       //Regularly read temp and humidity, display to LCD every minute
       readings();
@@ -259,19 +241,8 @@ void loop() {
       *portA &= ~0x20;
       *portG &= ~0x04;
       *portA |= 0x08;
-      //Ensure motor is off
       fanToggle(0);
-      //Red LED on, all others off
-
-
-      //Reset button switches state back to idle, but only if the water level is above the minimum threshold
       readings();
-      //uncomment this after figuring out where the reset button goes
-
-      //Display error message to LCD
-      //Doc says readings should be displayed to the LCD in all states except disabled, also says error should display an error message
-      // I feel like the error message takes precedence
-      //actually will use the UART to make it alternate between the two perhaps
       break;
 
     case 'R':
@@ -311,8 +282,6 @@ void readings() {
   humidity = DHT.humidity;
 }
 
-//checks if it's been a minute (or more) since the last update, if so writes the temperature and humidity to the LCD
-//does nothing if not
 void notify() {
     //Serial.println("Displaying data to LCD");
     lcd.clear();
@@ -344,24 +313,6 @@ void resetPressed(){
     changedState = 1;
   } 
 }
-/*  void toggleFan(bool running){
-    if(running){
-      currentTicks = 10204;
-      if(!timer_running){
-        *myTCCR1B |= 0x05;
-        timer_running = 1;
-      }
-    } else{
-      currentTicks = 65535;
-      if(timer_running){
-        *myTCCR1B &= 0xF8;
-        timer_running = 0;
-        *portE &= ~0x02;
-      }
-    }
-  }
-*/
-
 
 //Functions from previous labs
 void U0Init(int U0baud) {
@@ -500,8 +451,7 @@ void fanToggle(bool status){
         *portA &= ~0x02;
       }
     }
-    else
-    {
+    else{
       
           currentTicks = 10204;
           if(!timer_running)
