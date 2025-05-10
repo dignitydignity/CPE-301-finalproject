@@ -270,6 +270,9 @@ void loop() {
       if (water < waterThresh) {
         state = 'E';
         changedState=1;
+        lcd.clear();
+        lcd.setCursor(0,0);
+        lcd.print("LOW WATER");
       }
       break;
   }
