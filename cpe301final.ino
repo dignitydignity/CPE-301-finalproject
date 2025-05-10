@@ -262,13 +262,13 @@ void loop() {
 
       //Turn state back to idle if temperature is below threshold
       if (temp < tempThresh) {
-        state = "I";
+        state = 'I';
         changedState=1;
       }
 
       //Turn state to error if water gets too low
       if (water < waterThresh) {
-        state = "E";
+        state = 'E';
         changedState=1;
       }
       break;
